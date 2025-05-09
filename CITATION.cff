@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite our paper:"
+title: "Continuous Intraday Trading: An Open-Source Multi-Market Bidding Framework for Energy Storage Systems"
+authors:
+  - family-names: Miskiw
+    given-names: Kim K.
+    orcid: https://orcid.org/0009-0009-1389-4844
+  - family-names: Ludwig
+    given-names: Jan
+    orcid: https://orcid.org/0009-0003-2253-1996
+  - family-names: Semmelmann
+    given-names: Leo
+    orcid: https://orcid.org/0000-0001-6735-9518
+  - family-names: Weinhardt
+    given-names: Christof
+    orcid: https://orcid.org/0000-0002-7945-4077
+date-released: 2025-06-10
+doi: 10.1145/XXXXXXX     # Replace with actual DOI once available
+version: 1.0.0
+url: https://github.com/yourusername/BessBidder
+license: CC-BY-4.0
+keywords:
+  - Battery Storage
+  - Multi-Market Bidding
+  - Day-Ahead Market
+  - Continous Intraday Market
