@@ -1,4 +1,4 @@
-# BessBidder
+# BessBidder: Multi-Market Battery Bidding for Continous Intraday and Day-ahead Market
 
 **Continuous Intraday Trading: An Open-Source Multi-Market Bidding Framework for Energy Storage Systems**  
 *by Kim K. Miskiw, Jan Ludwig, Leo Semmelmann, Christof Weinhardt*  
