@@ -152,6 +152,17 @@ pre-commit run --all-files
 
 ---
 
+## Contributors
+
+This project was developed in collaboration between members of the Karlsruhe Institute of Technology (KIT).
+
+| Name                    | Role & Contribution                                                                 |
+|-------------------------|-------------------------------------------------------------------------------------|
+| **Kim K. Miskiw**       | Project lead, DRL model implementation, results nalaysis, repo maintanace, documentation, debugging and validation, writing               |
+| **Jan Ludwig**          | Data pipeline (ENTSO-E, EPEX), DRL model implementation, MILP modelling, rolling intrinsic strategies, debugging and validation              |
+| **Leo Semmelmann**      | Data pipeline (ENTSO-E, EPEX), rolling intrinsic strategies, conceptual support, review               |
+| **Christof Weinhardt** | Supervisory role, conceptual support     
+
 ## License
 
 This repository is licensed under the [GNU Affero General Public License v3.0](./LICENSES/AGPL-3.0-or-later.txt).
