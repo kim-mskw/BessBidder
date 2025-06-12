@@ -1,0 +1,21 @@
+ruff
+pandas
+jupyter
+entsoe-py
+missingno
+python-dotenv
+loguru
+sqlalchemy
+plotly
+paramiko
+scikit-learn
+pyomo
+pulp
+holidays
+gymnasium
+stable-baselines3
+torch
+tensorboard
+psycopg2-binary # PostgreSQL adapter for Python, binary version to avoid problems with ubuntu
+numpy
+black
