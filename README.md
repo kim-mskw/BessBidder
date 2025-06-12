@@ -1,4 +1,5 @@
 # BessBidder: Multi-Market Battery Bidding for Continous Intraday and Day-ahead Market
+![Python](https://img.shields.io/badge/python-3.12-blue.svg)
 
 **Continuous Intraday Trading: An Open-Source Multi-Market Bidding Framework for Energy Storage Systems**
 *by Kim K. Miskiw, Jan Ludwig, Leo Semmelmann, Christof Weinhardt*
@@ -41,7 +42,7 @@ pip install -r requirements.txt
 
 ### Create `.env` file for credentials:
 
-This files manages all the keys and the access to the database. Specify them before starting to wokr with the notebook. *IMPORTANT NOTE*: EPEX Spot data is not open source and for you to use the notebook, you will have to have bought the data. 
+This file manages all access credentials for the database and APIs. Specify them before starting to work with the notebook. *IMPORTANT NOTE*: EPEX Spot data is not open-source and for you to use the notebook, you will have to have bought the data. 
 
 ```env
 ENTSOE_API_KEY=...
@@ -56,7 +57,7 @@ EPEX_SFTP_PW=...
 
 ### Define study scope in `config.py`
 
-In this config you can deifne the technical parameters of the modelling as well as the time horizon and paths for storing it. Please make sure you configured everything to your liking before satrting the ddata download. The download of data potentiall depends on the chosen study setup. 
+In this file, you can define technical parameters of the model, the time horizon, and output paths. Please configure these settings before starting data acquisition, as the download depends on your study setup. 
 
 ## Database Configuration
 

@@ -165,6 +165,9 @@ ENV/
 
 # exclude everthing in data and output folder, since they contain epex data
 data/*
+!data/.gitkeep
 output/*
+!output/figures/
+!output/figures/.gitkeep
 
 # End of https://www.gitignore.io/api/macos,linux,django,python,pycharm
