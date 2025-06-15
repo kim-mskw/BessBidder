@@ -70,14 +70,11 @@ def main():
     Solve daily MILP battery optimisation problems for all days in the simulation range.
     Results are saved to disk as a single CSV file.
     """
-    # Extend time range to ensure full coverage
-    start = START - pd.Timedelta(days=1)
-    end = END + pd.Timedelta(days=1)
 
     # Get daily timestamps
     days = [
         t.date().isoformat()
-        for t in pd.date_range(start, end - pd.Timedelta(days=1), freq="1d")
+        for t in pd.date_range(START, END - pd.Timedelta(days=1), freq="1d")
     ]
 
     data = load_data()
