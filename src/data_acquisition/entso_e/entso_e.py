@@ -1,13 +1,11 @@
 from typing import Optional
 
-import pandas as pd
 from entsoe import EntsoePandasClient
 import os
 import pandas as pd
 from dateutil.relativedelta import relativedelta
 from dotenv import load_dotenv
 
-from src.data_acquisition.entso_e.entso_e import EntsoeHook
 from src.data_acquisition.postgres_db.postgres_db_hooks import ThesisDBHook
 
 load_dotenv()
