@@ -95,7 +95,7 @@ Results are saved to `output/single_market/day_ahead_milp/`.
 Run `02b_single_market_rolling_intrinsic_h.py` with CLI arguments:
 
 ```bash
-python 02b_single_market_rolling_intrinsic_h.py 60 1 1 365 10
+python 02b_single_market_rolling_intrinsic_h.py
 ```
 
 Logs will be saved in `output/single_market/rolling_intrinsic/ri_basic/`
