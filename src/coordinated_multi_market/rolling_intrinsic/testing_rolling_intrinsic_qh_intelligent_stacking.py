@@ -1,4 +1,3 @@
-import argparse
 import os
 import warnings
 
@@ -14,16 +13,12 @@ load_dotenv()
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
+POSTGRES_USERNAME = os.getenv("POSTGRES_USER")
+POSTGRES_DB_HOST = os.getenv("POSTGRES_DB_HOST")
+THESIS_DB_NAME = os.getenv("POSTGRES_DB_NAME")
 
-PASSWORD = os.getenv("SQL_PASSWORD")
-if PASSWORD:
-    password_for_url = f":{PASSWORD}"
-else:
-    password_for_url = ""
-
-POSTGRES_DB_NAME = os.getenv("POSTGRES_DB_NAME")
-CONNECTION = f"postgres://elli{password_for_url}@127.0.0.1/{POSTGRES_DB_NAME}"
-CONNECTION_ALCHEMY = f"postgresql://elli{password_for_url}@127.0.0.1/{POSTGRES_DB_NAME}"
+CONNECTION = f"postgresql://{POSTGRES_USERNAME}@{POSTGRES_DB_HOST}/{THESIS_DB_NAME}"
+CONNECTION_ALCHEMY = f"postgresql://{POSTGRES_USERNAME}@{POSTGRES_DB_HOST}/{THESIS_DB_NAME}"
 
 conn = psycopg2.connect(CONNECTION)
 conn_alchemy = create_engine(CONNECTION_ALCHEMY)

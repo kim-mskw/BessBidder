@@ -48,7 +48,7 @@ This file manages all access credentials for the database and APIs. Specify them
 ENTSOE_API_KEY=...
 POSTGRES_DB_NAME=...
 POSTGRES_DB_HOST=127.0.0.1
-POSTGRES_USER=...
+POSTGRES_USER=<username>
 EPEX_SFTP_HOST=...
 EPEX_SFTP_PORT=...
 EPEX_SFTP_USER=...
@@ -64,10 +64,10 @@ In this file, you can define technical parameters of the model, the time horizon
 To prepare a local PostgreSQL instance:
 
 ```sql
-CREATE USER elli WITH PASSWORD '<password>';
+CREATE USER <username>;
 CREATE DATABASE epex_data;
-GRANT ALL PRIVILEGES ON DATABASE epex_data TO elli;
-ALTER DATABASE epex_data OWNER TO elli;
+GRANT ALL PRIVILEGES ON DATABASE epex_data TO <username>;
+ALTER DATABASE epex_data OWNER TO <username>;
 ```
 
 Edit `pg_hba.conf` to set authentication method to `trust` for local development.

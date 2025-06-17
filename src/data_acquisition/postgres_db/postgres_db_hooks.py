@@ -34,7 +34,6 @@ class ThesisDBHook:
             username=username,
             hostname=hostname,
             db_name=THESIS_DB_NAME,
-            password="test123",
         )
         self._sql_alchemy_url = SQL_ALCHEMY_URL.substitute(
             username=username, hostname=hostname, db_name=THESIS_DB_NAME
