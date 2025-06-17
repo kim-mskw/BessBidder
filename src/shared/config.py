@@ -16,8 +16,8 @@ BUCKET_SIZE = 15
 MIN_TRADES = 10
 
 # Define model horizon
-START = pd.Timestamp(year=2020, month=10, day=31, tz="Europe/Berlin")
-END = pd.Timestamp(year=2020, month=12, day=31, tz="Europe/Berlin")
+START = pd.Timestamp(year=2019, month=10, day=31, tz="Europe/Berlin")
+END = pd.Timestamp(year=2024, month=1, day=1, tz="Europe/Berlin")
 
 # ----------------------------------------------
 # MODELLING CONFIGURATIONS
