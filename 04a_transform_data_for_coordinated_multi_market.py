@@ -112,14 +112,10 @@ def create_dataframes():
     df = derive_daily_wind_forecast_stats(df)
     df = calculate_id_da_spread_and_stats(df)
 
-    # TODO: Jan, I used the processed data by you which contains epex_spot_15min_de_lu_eur_per_mwh
-    # but in you data process it is not written anywhere, I tried adding it in 01b_data_acquisition.py but the call to ENTSO-E is not working
-    # any idea where these came from?
-
     df_spot_train = df.loc[TRAIN_START:TRAIN_END][
         [
             "epex_spot_60min_de_lu_eur_per_mwh",
-            # "epex_spot_15min_de_lu_eur_per_mwh",
+            "exaa_spot_15min_de_lu_eur_per_mwh",
             "load_forecast_d_minus_1_1000_total_de_lu_mw",
             "pv_forecast_d_minus_1_1000_de_lu_mw",
             "wind_offshore_forecast_d_minus_1_1000_de_lu_mw",
