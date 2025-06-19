@@ -37,12 +37,6 @@ SFTP_PORT = os.getenv("EPEX_SFTP_PORT")
 SFTP_USERNAME = os.getenv("EPEX_SFTP_USER")
 SFTP_PASSWORD = os.getenv("EPEX_SFTP_PW")
 
-PASSWORD = os.getenv("SQL_PASSWORD")
-if PASSWORD:
-    password_for_url = f":{PASSWORD}"
-else:
-    password_for_url = ""
-
 THESIS_DB_NAME = os.getenv("POSTGRES_DB_NAME")
 POSTGRES_USERNAME = os.getenv("POSTGRES_USER")
 POSTGRES_DB_HOST = os.getenv("POSTGRES_DB_HOST")
@@ -288,7 +282,7 @@ def execute_etl_transactions_old_format(years: List[int]) -> None:
     ## be aware: 2022 there was a change in data format
     # -> file for 2022 incomplete (new files "Continuous_Trades-MA-yyyymmdd-yyyymmddThhmmsssssZ")
     database = create_engine(
-        f"postgresql://{POSTGRES_USERNAME}{password_for_url}@{POSTGRES_DB_HOST}/{THESIS_DB_NAME}"
+        f"postgresql://{POSTGRES_USERNAME}@{POSTGRES_DB_HOST}/{THESIS_DB_NAME}"
     )
     for year in years:
         with tempfile.TemporaryDirectory() as tmpdirname:
