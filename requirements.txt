@@ -19,3 +19,5 @@ tensorboard
 psycopg2-binary # PostgreSQL adapter for Python, binary version to avoid problems with ubuntu
 numpy
 black
+debugpy
+gurobipy

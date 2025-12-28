@@ -11,20 +11,18 @@ from src.shared.config import (
     START,
     END,
 )
-from src.single_market.rolling_intrinsic import simulate_period
+
+from src.single_market.rolling_intrinsic_gurobi_qh import simulate_period
 
 load_dotenv()
 
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
-
 if __name__ == "__main__":
-
     simulate_period(
         START,
         END,
         discount_rate=0,
-        bucket_size=BUCKET_SIZE,
         c_rate=C_RATE,
         roundtrip_eff=RTE,
         max_cycles=MAX_CYCLES_PER_YEAR,

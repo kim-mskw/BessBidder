@@ -1,4 +1,6 @@
+
 import concurrent.futures
+import os
 
 import numpy as np
 import pandas as pd
@@ -10,22 +12,24 @@ from stable_baselines3.common.utils import obs_as_tensor
 from stable_baselines3.common.vec_env import VecEnv
 from stable_baselines3.ppo import PPO
 
-from src.coordinated_multi_market.rolling_intrinsic.training_rolling_intrinsic_h_intelligent_stacking import (
-    simulate_period_hourly_products,
-)
+
 from src.coordinated_multi_market.rolling_intrinsic.training_rolling_intrinsic_qh_intelligent_stacking import (
-    simulate_period_quarterhourly_products,
-)
-from src.shared.config import BUCKET_SIZE, C_RATE, MAX_CYCLES_PER_DAY, MIN_TRADES, RTE
+    simulate_days_stacked_quarterhourly_products,)
+
+
+from src.shared.config import BUCKET_SIZE, C_RATE, MAX_CYCLES_PER_DAY, MIN_TRADES, RTE, START_IDC_STEPS
 
 
 class CustomPPO(PPO):
-    def __init__(self, *args, intraday_product_type: str = None, **kwargs):
+    def __init__(self, *args, intraday_product_type: str = None,reward_log_path: str | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.intraday_product_type = intraday_product_type
         self.current_step = 0
         self.lambda_val = 0.5
         self._last_ri_reward_per_euro = 0
+        self.reward_log_path = reward_log_path
+    
+
 
     def collect_rollouts(
         self,
@@ -50,12 +54,11 @@ class CustomPPO(PPO):
         assert self._last_obs is not None, "No previous observation was provided"
         # Switch to eval mode (this affects batch norm / dropout)
         self.policy.set_training_mode(False)
-
         n_steps = 0
         rollout_buffer.reset()
-        timestamp_buffer = np.zeros(2048)
-        position_buffer = np.zeros(2048)
-        clearing_price_buffer = np.zeros(2048)
+        timestamp_buffer = np.zeros(n_rollout_steps)
+        position_buffer = np.zeros(n_rollout_steps)
+        clearing_price_buffer = np.zeros(n_rollout_steps)
         # TODO: Add revenue buffer for scaling the rewards
 
         # Sample new weights for the state dependent exploration
@@ -135,7 +138,7 @@ class CustomPPO(PPO):
             )
             self._last_obs = new_obs  # type: ignore[assignment]
             self._last_episode_starts = dones
-            if n_steps > 1:
+            if n_steps > 0:
                 timestamp_buffer[n_steps - 1] = infos[0]["timestamp"]
                 position_buffer[n_steps - 1] = infos[0]["position"]
                 clearing_price_buffer[n_steps - 1] = infos[0]["clearing_price"]
@@ -149,27 +152,58 @@ class CustomPPO(PPO):
         complete_periods = self._derive_period_lenghts_from_episode_starts_array(
             rollout_buffer.episode_starts.flatten()
         )
+
+        # Tensorbaord logging collect episodic values
+        ep_metrics = {
+            "reward_components/combined_ep_reward": [],
+            "reward_components/combined_ep_profit": [],
+            "reward_components/day_ahead_ep_reward": [],
+            "reward_components/day_ahead_ep_profit": [],
+            "reward_components/intraday_ep_reward": [],
+            "reward_components/intraday_ep_profit": [],
+        }
+
         for row_start, num_rows in complete_periods.items():
+            if num_rows <= 0:
+                continue
+
             period_timestamps = pd.to_datetime(
                 timestamp_buffer[row_start : row_start + num_rows], utc=True
             ).tz_convert("Europe/Berlin")
             period_volumes = position_buffer[row_start : row_start + num_rows]
+
+            # Skip incomplete cycles
             if not self._check_if_complete_cycle(period_volumes):
                 continue
 
-            if (
-                self.num_timesteps >= 200_000
-            ):  # in case you want to first train only on DA for 240_000 -> set num_timesteps to 240_000)
-                period_clearing_prices = clearing_price_buffer[
-                    row_start : row_start + num_rows
-                ]
-                da_trades = self._derive_day_ahead_trades(
-                    timestamps=period_timestamps,
-                    volumes=period_volumes,
-                    clearing_prices=period_clearing_prices,
-                    intraday_product_type=self.intraday_product_type,
-                )
 
+            period_clearing_prices = clearing_price_buffer[
+                row_start : row_start + num_rows
+            ]
+
+            # DA-Rewards
+            da_rewards = rollout_buffer.rewards[row_start : row_start + num_rows].flatten()
+
+            # Derive DA-Trades from the RL-Agent's actions
+            da_trades = self._derive_day_ahead_trades(
+                timestamps=period_timestamps,
+                volumes=period_volumes,
+                clearing_prices=period_clearing_prices,
+                intraday_product_type=self.intraday_product_type,
+            )
+            if len(da_trades) > 0:
+                da_profit = da_trades.profit.sum()
+            else:
+                da_profit = 0.0
+
+            # Default-Values for IDC (before 200k or if no simulation)
+            ri_stacked_profit = 0.0
+            ri_reward_per_scaled = 0.0
+            ri_reward_scaled = 0.0
+            rolling_intrinsic_rewards = np.zeros(num_rows, dtype=float)
+
+            # IDC starting at 1 Mio. Steps
+            if self.num_timesteps >= START_IDC_STEPS:
                 if self.intraday_product_type == "H":
                     (
                         rolling_intrinsic_results_stacked,
@@ -178,26 +212,18 @@ class CustomPPO(PPO):
                         period_timestamps, da_trades
                     )
                 elif self.intraday_product_type == "QH":
-                    (
-                        rolling_intrinsic_results_stacked
-                        # rolling_intrinsic_results_non_stacked,
-                    ) = self.run_simulations_quarterhourly_products_in_parallel(
-                        period_timestamps, da_trades
+                    rolling_intrinsic_results_stacked = (
+                        self.run_simulations_quarterhourly_products_in_parallel(
+                            period_timestamps, da_trades
+                        )
                     )
                 else:
                     raise ValueError(
-                        "Unsupported intraday product type %s. Only QH or H supported"
-                        % self.intraday_product_type
+                        f"Unsupported intraday product type {self.intraday_product_type}. Only QH or H supported"
                     )
 
-                # TODO: Change this scaling it is way too confusing and I need hourly mapping of RI profit
-
+                
                 da_profit = da_trades.profit.sum()
-                da_reward_sum = (
-                    rollout_buffer.rewards[row_start : row_start + num_rows]
-                    .flatten()
-                    .sum()
-                )
 
                 ri_stacked_profit = rolling_intrinsic_results_stacked[
                     "total_profit"
@@ -216,9 +242,91 @@ class CustomPPO(PPO):
                     self.lambda_val * da_rewards
                     + (1 - self.lambda_val) * rolling_intrinsic_rewards
                 )
+
                 rollout_buffer.rewards[row_start : row_start + num_rows] = (
                     combined_rewards.reshape(-1, 1)
                 )
+
+            else:
+                # Before 200k Steps: combined_reward = pure DA-Reward
+                # (Training remains DA-only because we do NOT overwrite the buffer)
+                combined_rewards = da_rewards.copy()
+
+            # CSV-Logging (always, from Step 0)
+            if self.reward_log_path is not None:
+                log_row = pd.DataFrame(
+                    {
+                        "episode_start_timestamp": [period_timestamps[0]],
+                        "episode_len": [num_rows],
+                        "lambda": [self.lambda_val],
+                        "da_profit_eur": [da_profit],
+                        "idc_profit_eur": [ri_stacked_profit],
+                        "da_reward_sum": [da_rewards.sum()],
+                        "idc_reward_sum": [rolling_intrinsic_rewards.sum()],
+                        "combined_reward_sum": [combined_rewards.sum()],
+                        "da_reward_mean": [da_rewards.mean()],
+                        "idc_reward_step": [ri_reward_scaled],
+                        "combined_reward_mean": [combined_rewards.mean()],
+                    }
+                )
+
+                file_exists = os.path.exists(self.reward_log_path)
+                log_row.to_csv(
+                    self.reward_log_path,
+                    mode="a",
+                    header=not file_exists,
+                    index=False,
+                )
+
+            # TensorBoard-Logging
+            combined_ep_reward = float(np.sum(combined_rewards))
+            combined_ep_profit = float(da_profit + ri_stacked_profit)
+
+            day_ahead_ep_reward = float(np.sum(da_rewards))
+            day_ahead_ep_profit = float(da_profit)
+
+            intraday_ep_reward = float(np.sum(rolling_intrinsic_rewards))
+            intraday_ep_profit = float(ri_stacked_profit)
+
+            ep_metrics["reward_components/combined_ep_reward"].append(combined_ep_reward)
+            ep_metrics["reward_components/combined_ep_profit"].append(combined_ep_profit)
+            ep_metrics["reward_components/day_ahead_ep_reward"].append(day_ahead_ep_reward)
+            ep_metrics["reward_components/day_ahead_ep_profit"].append(day_ahead_ep_profit)
+            ep_metrics["reward_components/intraday_ep_reward"].append(intraday_ep_reward)
+            ep_metrics["reward_components/intraday_ep_profit"].append(intraday_ep_profit)
+
+
+            # Step-Logging (per time step within the episode)
+            if self.reward_log_path is not None:
+                step_log_path = self.reward_log_path.replace(".csv", "_steps.csv")
+                per_step_df = pd.DataFrame(
+                    {
+                        "episode_start_timestamp": [period_timestamps[0]] * num_rows,
+                        "step_in_episode": np.arange(num_rows),
+                        "timestamp": period_timestamps,
+                        "da_reward": da_rewards,
+                        "idc_reward": rolling_intrinsic_rewards,
+                        "combined_reward": combined_rewards,
+                        "position": period_volumes,
+                        "clearing_price": period_clearing_prices,
+                    }
+                )
+                file_exists = os.path.exists(step_log_path)
+                per_step_df.to_csv(
+                    step_log_path,
+                    mode="a",
+                    header=not file_exists,
+                    index=False,
+                )
+
+        # TensorBoard: Calcuate mean of all episodes in rollout
+        n_logged_eps = len(ep_metrics["reward_components/combined_ep_reward"])
+        if n_logged_eps > 0:
+            for k, vals in ep_metrics.items():
+                self.logger.record(k, float(np.mean(vals)))
+
+            self.logger.record("reward_components/episodes_in_rollout", n_logged_eps)
+
 
         rollout_buffer.compute_returns_and_advantage(last_values=values, dones=dones)
 
@@ -234,37 +342,25 @@ class CustomPPO(PPO):
     ):
         with concurrent.futures.ThreadPoolExecutor() as executor:
             future_stacked = executor.submit(
-                simulate_period_quarterhourly_products,
+                #simulate_period_quarterhourly_products,
+                simulate_days_stacked_quarterhourly_products,
                 start_day=period_timestamps[0],
                 end_day=period_timestamps[0] + pd.Timedelta(days=1),
-                threshold=0,
-                threshold_abs_min=0,
+                #threshold=0,
+                # threshold_abs_min=0,
                 discount_rate=0,
                 bucket_size=BUCKET_SIZE,
                 c_rate=C_RATE,
                 roundtrip_eff=RTE,
                 max_cycles=MAX_CYCLES_PER_DAY,
                 min_trades=MIN_TRADES,
-                day_ahead_trades_drl=da_trades,
+                #day_ahead_trades_drl=da_trades,
+                drl_output=da_trades
             )
 
-            # future_non_stacked = executor.submit(
-            #    simulate_period_quarterhourly_products,
-            #   start_day=period_timestamps[0],
-            #   end_day=period_timestamps[0] + pd.Timedelta(days=1),
-            #    threshold=0,
-            #   threshold_abs_min=0,
-            #    discount_rate=0,
-            #    bucket_size=BUCKET_SIZE,
-            #    c_rate=C_RATE,
-            #    roundtrip_eff=RTE,
-            #    max_cycles=MAX_CYCLES_PER_DAY,
-            #    min_trades=MIN_TRADES,
-            # )
 
             rolling_intrinsic_results_stacked = future_stacked.result()
-            # rolling_intrinsic_results_non_stacked = future_non_stacked.result()
-        # rolling_intrinsic_results_stacked = future_stacked.copy()
+
 
         return rolling_intrinsic_results_stacked
 
@@ -312,19 +408,25 @@ class CustomPPO(PPO):
         # Calculate episode lengths by finding the difference between consecutive start indices
         episode_lengths = np.diff(episode_indices)
         # Add the length of the last episode (from the last start to the end of the array)
-        final_length = len(episode_starts) - 1 - episode_indices[-1]
+        final_length = len(episode_starts)  - episode_indices[-1]
         episode_lengths = np.append(episode_lengths, final_length)
         episode_dict = {
             index: length
             for index, length in zip(episode_indices, episode_lengths)
-            # if length == 24
+                if length > 0
+            #if length == 24
         }
         return episode_dict
 
     @staticmethod
-    def _check_if_complete_cycle(period_volumes):
+    def _check_if_complete_cycle(period_volumes, capacity: float = 1.0,
+                             min_cycle_fraction: float = 0.0):
         traded_volume = abs(period_volumes).sum()
-        return traded_volume / (2 * 1) == 1
+        cycle_fraction = traded_volume / (2 * capacity)
+        return cycle_fraction >= min_cycle_fraction
+
+    
+
 
     @staticmethod
     def _derive_day_ahead_trades(
@@ -369,7 +471,8 @@ class CustomPPO(PPO):
                                 "side": side,
                                 "quantity": net_volume,
                                 "price": price,
-                                "product": timestamps[idx],
+                                #"product": timestamps[idx],
+                                "product": product_index,
                                 "profit": profit / 4,
                             }
                         }
@@ -379,5 +482,11 @@ class CustomPPO(PPO):
                     "Wrong intraday product type %s. Only QH or H allowed."
                     % intraday_product_type
                 )
+        
+        # If no trading activity, return empty DataFrame
+        if not day_ahead_trades:
+            return pd.DataFrame(
+                columns=["execution_time", "side", "quantity", "price", "product", "profit"]
+            )
 
         return pd.DataFrame(day_ahead_trades).T.reset_index(drop=True)

@@ -12,8 +12,8 @@ from sqlalchemy.engine import Connection
 
 load_dotenv()
 
-POSTGRES_URL = Template("postgres://${username}@${hostname}/${db_name}")
-SQL_ALCHEMY_URL = Template("postgresql://${username}@${hostname}/${db_name}")
+POSTGRES_URL = Template("postgres://${username}:${password}@${hostname}:${port}/${db_name}")
+SQL_ALCHEMY_URL = Template("postgresql://${username}:${password}@${hostname}:${port}/${db_name}")
 AFRR_CAPACITY_PRICES_TABLE_NAME = "afrr_capacity_prices"
 ENTSOE_FORECASTS_TABLE_NAME = "entsoe_forecasts"
 ENTSOE_PRICES_TABLE_NAME = "entsoe_prices"
@@ -27,16 +27,26 @@ class ThesisDBHook:
     - The name of the DB has to be specified in this code"
     """
 
-    def __init__(self, username: str, hostname: str) -> None:
+    def __init__(
+        self, username: str, hostname: str, port: str | None = None, password: str | None = None
+    ) -> None:
         self._username = username
         self._hostname = hostname
+        self._port = port or os.getenv("POSTGRES_PORT", "5432")
+        self._password = password or os.getenv("SQL_PASSWORD") or os.getenv("POSTGRES_PASSWORD") or ""
         self._postgres_url = POSTGRES_URL.substitute(
             username=username,
+            password=self._password,
             hostname=hostname,
+            port=self._port,
             db_name=THESIS_DB_NAME,
         )
         self._sql_alchemy_url = SQL_ALCHEMY_URL.substitute(
-            username=username, hostname=hostname, db_name=THESIS_DB_NAME
+            username=username,
+            password=self._password,
+            hostname=hostname,
+            port=self._port,
+            db_name=THESIS_DB_NAME,
         )
         self._postgres_connection: Optional = None
         self._sql_alchemy_connection: Optional = None
@@ -236,7 +246,6 @@ class ThesisDBHook:
         df.set_index("time", inplace=True)
         df.index = pd.to_datetime(df.index, utc=True)
         df.sort_index(inplace=True)
-        df.dropna(inplace=True)
         return df
 
     def get_afrr_capacity_price(
@@ -304,3 +313,5 @@ class ThesisDBHook:
         df.sort_index(inplace=True)
         df.dropna(inplace=True)
         return df
+    
+

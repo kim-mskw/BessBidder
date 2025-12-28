@@ -5,10 +5,8 @@ import holidays
 import numpy as np
 import pandas as pd
 
-from src.shared.config import START, END, DATA_PATH
+from src.shared.config import DATA_START, DATA_END, DATA_PATH
 
-TRAIN_START = START
-TRAIN_END = END
 
 ZEITUMSTELLUNGEN = [
     "2019-03-31T00:00:00+01:00",
@@ -23,6 +21,9 @@ ZEITUMSTELLUNGEN = [
     "2023-10-29T00:00:00+02:00",
 ]
 
+# Format the start and end dates for the output file name
+data_start = DATA_START.tz_convert("Europe/Berlin").date().isoformat()
+data_end = DATA_END.tz_convert("Europe/Berlin").date().isoformat()
 
 def make_time_features(df: pd.DataFrame) -> pd.DataFrame:
     df["date_month"] = df.index.month
@@ -94,9 +95,39 @@ def calculate_id_da_spread_and_stats(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def derive_daily_exaa_forecast_stats(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Daily features derived from exaa_15min_de_lu_eur_per_mwh (hourly series here).
+    For each day, compute stats on that day's EXAA forecast curve and ffill to hourly index.
+    """
+    s = df["exaa_15min_de_lu_eur_per_mwh"].astype(float)
+
+    daily_mean = s.resample("D").mean()
+    daily_std = s.resample("D").std()
+    daily_min = s.resample("D").min()
+    daily_max = s.resample("D").max()
+    daily_spread = daily_max - daily_min
+
+    # intra-day absolute differences (ramps)
+    abs_diff = s.diff().abs()
+    daily_diff_sum = abs_diff.resample("D").sum()
+    daily_diff_max = abs_diff.resample("D").max()
+
+    df["exaa_pf_daily_mean"] = daily_mean.reindex(df.index, method="ffill")
+    df["exaa_pf_daily_std"] = daily_std.reindex(df.index, method="ffill")
+    df["exaa_pf_daily_min"] = daily_min.reindex(df.index, method="ffill")
+    df["exaa_pf_daily_max"] = daily_max.reindex(df.index, method="ffill")
+    df["exaa_pf_daily_spread"] = daily_spread.reindex(df.index, method="ffill")
+    df["exaa_pf_daily_diff_sum"] = daily_diff_sum.reindex(df.index, method="ffill")
+    df["exaa_pf_daily_diff_max"] = daily_diff_max.reindex(df.index, method="ffill")
+
+    return df
+
+
+
 def create_dataframes():
     df = pd.read_csv(
-        Path("data", "data_2019-01-01_2024-01-01_hourly.csv"),
+        Path("data", f"data_{data_start}_{data_end}_hourly.csv"),
         index_col=0,
         parse_dates=True,
     ).ffill()
@@ -106,16 +137,15 @@ def create_dataframes():
 
     df = df[~df.index.to_series().apply(lambda x: x.date()).isin(missing_days)]
 
-    df = df.loc["2019":"2023"].copy()
-
     df = make_time_features(df)
     df = derive_daily_wind_forecast_stats(df)
     df = calculate_id_da_spread_and_stats(df)
+    df = derive_daily_exaa_forecast_stats(df)
 
-    df_spot_train = df.loc[TRAIN_START:TRAIN_END][
+    df_spot_train = df.loc[DATA_START:DATA_END][
         [
             "epex_spot_60min_de_lu_eur_per_mwh",
-            "exaa_spot_15min_de_lu_eur_per_mwh",
+            "exaa_15min_de_lu_eur_per_mwh",
             "load_forecast_d_minus_1_1000_total_de_lu_mw",
             "pv_forecast_d_minus_1_1000_de_lu_mw",
             "wind_offshore_forecast_d_minus_1_1000_de_lu_mw",
@@ -132,6 +162,14 @@ def create_dataframes():
             "spread_id_full_da_qh_std",
             "spread_id_full_da_qh_min",
             "spread_id_full_da_qh_max",
+            "exaa_pf_daily_mean",
+            "exaa_pf_daily_std",
+            "exaa_pf_daily_min",
+            "exaa_pf_daily_max",
+            "exaa_pf_daily_spread",
+            "exaa_pf_daily_diff_sum",
+            "exaa_pf_daily_diff_max",
+
         ]
     ]
 

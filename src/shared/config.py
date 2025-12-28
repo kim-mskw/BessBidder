@@ -15,9 +15,27 @@ MAX_CYCLES_PER_DAY = 1
 BUCKET_SIZE = 15
 MIN_TRADES = 10
 
-# Define model horizon
-START = pd.Timestamp(year=2019, month=1, day=1, tz="Europe/Berlin")
-END = pd.Timestamp(year=2024, month=1, day=1, tz="Europe/Berlin")
+# Data timeframe configuration (importnant for naming csv files, etc.)
+DATA_START = pd.Timestamp(year=2019, month=1, day=1, tz="Europe/Berlin")
+DATA_END   = pd.Timestamp(year=2019, month=2, day=1, tz="Europe/Berlin")  # exklusive Obergrenze
+
+
+# Validation timeframe
+VAL_FRACTION = 0.1
+# Test timeframe
+TEST_FRACTION = 0.1
+
+# For single market day ahead optimizer, rolling intrinsic and myopic market
+START = DATA_START
+END   = DATA_END
+
+# Problematic dates that need to be removed from the data for the rolling intrinsic algorithm to work
+PROBLEMATIC_DATES = [
+    pd.Timestamp("2020-11-15").date(),
+    pd.Timestamp("2020-12-27").date(),
+    pd.Timestamp("2020-12-31").date(),
+    
+]
 
 # ----------------------------------------------
 # MODELLING CONFIGURATIONS
@@ -25,7 +43,10 @@ END = pd.Timestamp(year=2024, month=1, day=1, tz="Europe/Berlin")
 # 02 SINGLE MARKET CONFIGURATION
 
 OUTPUT_DIR_DA = os.path.join("output", "myopic_multi_market", "day_ahead_milp")
-FILENAME_DA = "11-12.2020_ACM.csv"
+# dynamically define filename based on start and end date
+FILENAME_DA = "day_ahead_milp_results_{}_to_{}.csv".format(
+    START.strftime("%Y-%m-%d"), END.strftime("%Y-%m-%d")
+)
 DATA_PATH_DA = Path("data", "data_2019-01-01_2024-01-01_hourly.csv")
 
 
@@ -41,6 +62,8 @@ TRAINING_STEPS_INTELLIGENT = 300000
 TRAINING_STEPS_BASIC = 300000
 
 DATA_PATH = Path("data", "simplified_data_jan_with_exaa_and_id_full")
+
+PRECOMPUTED_VWAP_PATH = os.path.join( "data/precomputed_vwaps")
 
 COORDINATED_MODEL_NAME_QH = "model_intelligent_quarterhourly_products"
 TRAIN_CSV_NAME = "basic_battery_dam_train_log_v3.csv"

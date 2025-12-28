@@ -76,6 +76,9 @@ def main():
         t.date().isoformat()
         for t in pd.date_range(START, END - pd.Timedelta(days=1), freq="1d")
     ]
+    
+    # limit days to START and END from config.py
+    days = [day for day in days if (pd.Timestamp(day).date() >= START.date()) and (pd.Timestamp(day).date() < END.date())]
 
     data = load_data()
 

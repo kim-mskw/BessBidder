@@ -40,6 +40,63 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
+## Database Configuration
+
+### PostgreSQL Installation (Required)
+
+PostgreSQL must be installed and running for example locall as a Windows service. 
+
+**Windows Installation:**
+1. Download the EDB PostgreSQL installer from [postgresql.org/download/windows](https://www.postgresql.org/download/windows/)
+2. Run the installer and follow these settings:
+   - Set a password for the `postgres` superuser (e.g., `postgres`)
+   - **Enable "Install as a service"** (important!)
+   - Use default port `5432`
+   - Finish the installer
+3. Verify the service is running:
+   ```powershell
+   Get-Service | Where-Object {$_.Name -like 'postgresql*'} | Format-Table Name, Status
+   ```
+
+### Configure Local Authentication
+
+To enable password-free local development connections, edit `pg_hba.conf`:
+
+1. Open the file (adjust the version number if needed):
+   ```powershell
+   notepad "C:\Program Files\PostgreSQL\16\data\pg_hba.conf"
+   ```
+2. Find the IPv4 and IPv6 local connection lines and change the authentication method from `scram-sha-256` (or `md5`) to `trust`:
+   ```
+   # IPv4 local connections:
+   host    all             all             127.0.0.1/32            trust
+   # IPv6 local connections:
+   host    all             all             ::1/128                 trust
+   ```
+3. Save and restart the PostgreSQL service:
+   ```powershell
+   Restart-Service -Name postgresql-x64-16
+   ```
+
+### Create Database User and Database
+
+To prepare a local PostgreSQL instance run the following commands with your chosen <username>:
+
+```powershell
+psql -U postgres -h 127.0.0.1
+```
+
+Then in the psql prompt:
+
+```sql
+CREATE USER <username>;
+CREATE DATABASE epex_data;
+GRANT ALL PRIVILEGES ON DATABASE epex_data TO <username>;
+ALTER DATABASE epex_data OWNER TO <username>;
+```
+
+Exit psql with `\q`.
+
 ### Create `.env` file for credentials:
 
 This file manages all access credentials for the database and APIs. Specify them before starting to work with the notebook. *IMPORTANT NOTE*: EPEX Spot data is not open-source and for you to use the notebook, you will have to have bought the data. 
@@ -59,18 +116,6 @@ EPEX_SFTP_PW=...
 
 In this file, you can define technical parameters of the model, the time horizon, and output paths. Please configure these settings before starting data acquisition, as the download depends on your study setup. 
 
-## Database Configuration
-
-To prepare a local PostgreSQL instance:
-
-```sql
-CREATE USER <username>;
-CREATE DATABASE epex_data;
-GRANT ALL PRIVILEGES ON DATABASE epex_data TO <username>;
-ALTER DATABASE epex_data OWNER TO <username>;
-```
-
-Edit `pg_hba.conf` to set authentication method to `trust` for local development.
 
 ## Data Acquisition
 
@@ -82,6 +127,8 @@ Steps:
 2. Load intraday transaction data (pre/post 2022 formats)
 
 Alternatively, run the scripts in `src/data_acquisition/epex_sftp/` directly.
+
+These scripts collect all input data required to run the simulation, except for EXAA prices which are used as price forecasts. Access to a dedicated API is available but incurs additional cost. As a workaround, we currently use historical EPEX spot prices as a proxy, which implies a perfect-foresight assumption in the simulation setup. The results in the orginial paper, however, are calculated on the EXAA prices as forecasts. 
 
 ## Single-Market Bidding
 
@@ -97,6 +144,9 @@ Run `02b_single_market_rolling_intrinsic_h.py` with CLI arguments:
 ```bash
 python 02b_single_market_rolling_intrinsic_h.py
 ```
+
+To increase the speed of the rolling intrinsic algorithm we switched the implementation to gurobipy. To use this one needs a gurobipy license which can be obtained free of charge for academics.
+
 
 Logs will be saved in `output/single_market/rolling_intrinsic/ri_basic/`
 
@@ -158,7 +208,7 @@ This project was developed in collaboration between members of the Karlsruhe Ins
 
 | Name                    | Role & Contribution                                                                 |
 |-------------------------|-------------------------------------------------------------------------------------|
-| **Kim K. Miskiw**       | Project lead, DRL model implementation, results nalaysis, repo maintanace, documentation, debugging and validation, writing               |
+| **Kim K. Miskiw**       | Project lead, DRL model implementation, results analysis, repo maintenance, documentation, debugging and validation, writing               |
 | **Jan Ludwig**          | Data pipeline (ENTSO-E, EPEX), DRL model implementation, MILP modelling, rolling intrinsic strategies, debugging and validation              |
 | **Leo Semmelmann**      | Data pipeline (ENTSO-E, EPEX), rolling intrinsic strategies, conceptual support, review               |
 | **Christof Weinhardt** | Supervisory role, conceptual support     

@@ -6,16 +6,19 @@ import pandas as pd
 import seaborn as sns
 
 
-def load_data(csv_path: str) -> pd.DataFrame:
-    df = pd.read_csv(csv_path, index_col="time", parse_dates=True)
+def load_data(csv_path):
+    df = pd.read_csv(csv_path, index_col=0, parse_dates=True)
 
-    try:
+    # Wenn Index noch keine Zeitzone hat: wir nehmen an, dass er in UTC geloggt wurde
+    if df.index.tz is None:
         df.index = df.index.tz_localize("utc").tz_convert("Europe/Berlin")
-    except TypeError:
-        df.index = df.index.tz_localize(None).tz_localize("Europe/Berlin")
+    else:
+        # Index ist bereits tz-aware → nur noch nach Europe/Berlin umrechnen
+        df.index = df.index.tz_convert("Europe/Berlin")
     df["action_in_mw"] = (df[["action_1"]] - 1) / 1
     df["date"] = df.index.date
     return df
+
 
 
 def save_plot(plot_func, df: pd.DataFrame, file_name: str, folder: str) -> None:

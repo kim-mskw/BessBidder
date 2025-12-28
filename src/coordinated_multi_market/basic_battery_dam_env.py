@@ -28,8 +28,12 @@ class BasicBatteryDAM(gym.Env):
         capacity: np.float32 = 1.0,
         round_trip_efficiency: np.float32 = 1.0,
         start_end_soc: np.float32 = 0.0,
+        max_cycles: float = 1.0,
     ):
-        self._episode_id = 0
+        self._episode_id = -1
+        self._step_in_episode = 0
+        self._global_step = 0
+
         self._modus = modus
         self._logging_path = logging_path
         self._input_data = input_data
@@ -43,9 +47,14 @@ class BasicBatteryDAM(gym.Env):
         # TODO: implement start end restriction for the storage
         self._start_end_soc = start_end_soc
         self._current_soc = self._start_end_soc
-        self._remaining_cycles = 1
+
+        self.max_cycles = float(max_cycles)
+        self._remaining_cycles = self.max_cycles
+
+
+       #self._remaining_cycles = 1
         self.action_space = spaces.Discrete(7)
-        self.observation_space = spaces.Box(-1, 1, shape=(42,), dtype=np.float32)
+        self.observation_space = spaces.Box(-1, 1, shape=(50,), dtype=np.float32)
         self._current_time_step = 0
         self._realized_quantity_t_minus_1 = 0
         self._total_profit = 0.0
@@ -55,9 +64,13 @@ class BasicBatteryDAM(gym.Env):
         sin_time_step = np.sin(2 * np.pi * self._current_time_step / 24)
         cos_time_step = np.cos(2 * np.pi * self._current_time_step / 24)
 
+        # Calculate sine and cosine of day of the week
+        sin_day_of_week = np.sin(2 * np.pi * self._day_of_week / 7)
+        cos_day_of_week = np.cos(2 * np.pi * self._day_of_week / 7)
+
         # Calculate sine and cosine of month
         sin_month = np.sin(2 * np.pi * self._date_month / 12)
-        cos_month = np.sin(2 * np.pi * self._date_month / 12)
+        cos_month = np.cos(2 * np.pi * self._date_month / 12)
 
         return np.concatenate(
             (
@@ -74,9 +87,11 @@ class BasicBatteryDAM(gym.Env):
                 self._delta_load_forecast[self._current_time_step],
                 self._delta_pv_forecast_scaled[self._current_time_step],
                 self._delta_wind_onshore_forecast_scaled[self._current_time_step],
+                # encoded month and day of week
                 sin_month,
                 cos_month,
-                self._day_of_week,
+                sin_day_of_week,
+                cos_day_of_week,
                 # get daily RE statistics
                 self._wind_forecast_daily_mean,
                 self._wind_forecast_daily_std,
@@ -84,6 +99,14 @@ class BasicBatteryDAM(gym.Env):
                 self._spread_id_full_da_std,
                 self._spread_id_full_da_min,
                 self._spread_id_full_da_max,
+                # new EXAA features
+                self._exaa_pf_daily_mean,
+                self._exaa_pf_daily_std,
+                self._exaa_pf_daily_min,
+                self._exaa_pf_daily_max,
+                self._exaa_pf_daily_spread,
+                self._exaa_pf_daily_diff_sum,
+                self._exaa_pf_daily_diff_max,
             ),
             axis=None,
             dtype=np.float32,
@@ -100,111 +123,213 @@ class BasicBatteryDAM(gym.Env):
         self._current_time_step = 0
         self._realized_quantity_t_minus_1 = 0
         self._current_soc = self._start_end_soc
-        self._remaining_cycles = 1
+        self._remaining_cycles = float(self.max_cycles)
         self._total_profit = 0.0
+        
+        self._episode_id += 1
+        self._step_in_episode = 0
+
         observation = self._get_obs()
         return observation, {}  # empty info dict
+    
+
+
+    
+    def set_max_cycles(self, value: float) -> None:
+        """
+        Setzt die maximal erlaubten Vollzyklen pro Tag (für Curriculum Learning).
+        Greift ab dem nächsten reset().
+        """
+        self.max_cycles = float(value)
+
 
     def step(
         self, action: ActType
     ) -> tuple[ObsType, SupportsFloat, bool, bool, dict[str, Any]]:
-        """
+        # IDs für diesen Step einfrieren
+        current_episode_id = self._episode_id
+        current_step_in_episode = self._step_in_episode
+        timestep_in_day = self._current_time_step  # 0..23
 
-        :param action:
-        :return:
-        """
-        action_continuous = self._map_discrete_action_to_continuous(action)
-        quantity = np.clip(
-            action_continuous, -1.0, 1.0
-        )  # Ensure it's within the valid range
+        # Map diskrete Action auf kontinuierliche Menge in [-1, 1]
+        action_continuous = float(self._map_discrete_action_to_continuous(action))
+        desired_quantity = float(np.clip(action_continuous, -1.0, 1.0))  # Laden (<0) / Entladen (>0)
 
-        clearing_price = self._realized_price_vector[self._current_time_step]
-        clearing_price_scaled = self._realized_price_vector_scaled[
-            self._current_time_step
-        ]
+        clearing_price = float(self._realized_price_vector[timestep_in_day])
 
-        if quantity > 0:
-            sell_decision = min(self._current_soc, quantity, 2 * self._remaining_cycles)
-            realized_quantity = sell_decision
-        elif quantity < 0:
-            # buy_decision = quantity
-            buy_decision = min(
-                self._capacity - self._current_soc,
-                (-1) * quantity,
-                2 * self._remaining_cycles,
-            )
-            realized_quantity = (-1) * buy_decision
+        soc_before = float(self._current_soc)
+        remaining_cycles_before = float(self._remaining_cycles)
+
+        
+        # Physically feasible quantity to charge/discharge
+        overflow = 0.0
+
+        if desired_quantity > 0.0:
+            # Entladen
+            max_by_soc = float(self._current_soc)
+            max_by_cycles = float(2.0 * self._remaining_cycles)
+            feasible_max = max(0.0, min(max_by_soc, max_by_cycles))
+
+            realized_quantity = min(desired_quantity, feasible_max)
+            overflow = max(0.0, desired_quantity - feasible_max)
+
+        elif desired_quantity < 0.0:
+            # Laden # Charging
+            max_charge_by_soc = float(self._capacity - self._current_soc)
+            max_charge_by_cycles = float(2.0 * self._remaining_cycles)
+            feasible_charge = max(0.0, min(max_charge_by_soc, max_charge_by_cycles))
+
+            desired_charge = -desired_quantity  # > 0
+            realized_charge = min(desired_charge, feasible_charge)
+            realized_quantity = -realized_charge
+
+            overflow = max(0.0, desired_charge - feasible_charge)
         else:
-            realized_quantity = 0
+            realized_quantity = 0.0
+            overflow = 0.0
 
-        reward = clearing_price * realized_quantity / (85 / 24)
+        delta_soc = -realized_quantity
+        self._current_soc = float(self._current_soc + delta_soc)
 
-        delta_soc = 0
-        delta_soc = (-1) * realized_quantity
+        delta_cycles = abs(delta_soc) / (2.0 * self._capacity)
+        self._remaining_cycles = float(self._remaining_cycles - delta_cycles)
+        self._realized_quantity_t_minus_1 = float(realized_quantity)
 
-        profit = 0
-        if realized_quantity < 0:
-            profit = clearing_price * realized_quantity * (1 / self._efficiency)
-        elif realized_quantity > 0:
-            profit = clearing_price * realized_quantity * self._efficiency
-
-        self._current_soc += delta_soc
-        delta_cycles = abs(delta_soc) / (2 * self._capacity)
-        self._remaining_cycles -= delta_cycles
-
-        self._realized_quantity_t_minus_1 = realized_quantity
-
-        game_over = False
-        if round(self._remaining_cycles, 2) <= 0:
-            game_over = True
+        if realized_quantity < 0.0:
+            energy_into_batt = -realized_quantity
+            energy_from_grid = energy_into_batt / self._efficiency
+            profit = -clearing_price * energy_from_grid
+        
+        elif realized_quantity > 0.0:
+            energy_from_batt = realized_quantity
+            energy_to_grid = energy_from_batt * self._efficiency
+            profit = clearing_price * energy_to_grid
+        else:
+            profit = 0.0
 
         self._total_profit += profit
 
+        reward = profit / (100.0 * float(self._capacity))
+
+        invalid_penalty_coef = 0.05
+        if overflow > 1e-6:
+            reward -= invalid_penalty_coef * overflow
+
+        game_over = round(self._remaining_cycles, 4) <= 0.0
+        terminated = bool(timestep_in_day == PERIOD_LENGTH - 1 ) or game_over
+
+        if terminated and self._current_soc > 1e-3:
+            soc_penalty_coef = 0.05
+            reward -= soc_penalty_coef * float(self._current_soc)
+
+
+        timestamp = self._timestamps[timestep_in_day]
+
         info = self._get_info()
         observation = self._get_obs()
+        reward = float(reward)
 
-        self._last_time_step = self._current_time_step
-        self._current_time_step += 1
-        # terminated = True if (self._current_time_step == PERIOD_LENGTH) or game_over else False
-        terminated = (
-            True if (self._current_time_step == PERIOD_LENGTH) or game_over else False
+        # Debug-Logging
+        self.log_debug_step(
+            episode_id=current_episode_id,
+            step_in_episode=current_step_in_episode,
+            timestep_in_day=timestep_in_day,
+            timestamp=timestamp,
+            obs=observation,
+            action_discrete=action,
+            action_continuous=desired_quantity,
+            realized_quantity=realized_quantity,
+            soc_before=soc_before,
+            soc_after=self._current_soc,
+            remaining_cycles=self._remaining_cycles,
+            reward=reward,
+            realized_price=clearing_price,
+            forecast_price_current=self._forecasted_price_vector[timestep_in_day],
         )
 
-        if terminated:
-            self._episode_id += 1
-
-            # check if we have capacity left in battery
-            if self._current_soc > 0:
-                # penalty because missed profit
-                penalty = self._current_soc * (85 / 24)
-                reward = -penalty
-
+        # reward logging 
         self.log_data(
             modus=self._modus,
-            timestamp=self._timestamps[self._last_time_step],
-            episode_id=self._episode_id,
-            timestep=self._last_time_step,
+            timestamp=timestamp,
+            episode_id=current_episode_id,
+            timestep=timestep_in_day,
             observations=observation,
             action=action,
             reward=reward,
-            dam_price_forecast=self._forecasted_price_vector[self._last_time_step],
+            dam_price_forecast=self._forecasted_price_vector[timestep_in_day],
             dam_price=clearing_price,
             price_bid=np.nan,
-            capacity_bid=quantity,
+            capacity_bid=desired_quantity,
             capacity_trade=realized_quantity,
             delta_soc=delta_soc,
             remaining_cycles=self._remaining_cycles,
-            # remaining_cycles=np.nan,
             profit=profit,
         )
 
-        return (
-            observation,
-            reward,
-            terminated,
-            False,
-            info,
-        )
+        
+        self._step_in_episode += 1
+        self._global_step += 1
+        self._current_time_step += 1
+
+        return observation, reward, terminated, False, info
+
+
+
+
+    # New logging function for debug steps
+    def log_debug_step(
+        self,
+        episode_id: int,
+        step_in_episode: int,
+        timestep_in_day: int,
+        timestamp,
+        obs: np.ndarray,
+        action_discrete: int,
+        action_continuous: float,
+        realized_quantity: float,
+        soc_before: float,
+        soc_after: float,
+        remaining_cycles: float,
+        reward: float,
+        realized_price: float,
+        forecast_price_current: float,
+    ):
+        # Path for debug CSV #
+        path = os.path.join(self._logging_path, "debug_obs_steps.csv")
+
+        ts = pd.to_datetime(timestamp)
+        if ts.tz is None:
+            ts = ts.tz_localize("Europe/Berlin")
+        ts_utc = ts.tz_convert("UTC")
+        ts_local = ts.tz_convert("Europe/Berlin")
+
+        row = {
+            "global_step": self._global_step,
+            "episode_id": episode_id,
+            "step_in_episode": step_in_episode,
+            "timestep_in_day": timestep_in_day,
+            "time_utc": ts_utc.isoformat(),
+            "time_local": ts_local.isoformat(),
+            "action_discrete": action_discrete,
+            "action_continuous": action_continuous,
+            "realized_quantity": realized_quantity,
+            "soc_before": soc_before,
+            "soc_after": soc_after,
+            "remaining_cycles": remaining_cycles,
+            "reward": reward,
+            "realized_price": realized_price,
+            "forecast_price_current": forecast_price_current,
+            "obs_array": obs.tolist(),
+        }
+
+        for i, v in enumerate(obs):
+            row[f"obs_{i}"] = v
+
+        df = pd.DataFrame([row])
+
+        write_header = not os.path.isfile(path)
+        df.to_csv(path, mode="a", header=write_header, index=False)
+
 
     def _get_info(self):
         return {
@@ -265,125 +390,77 @@ class BasicBatteryDAM(gym.Env):
     def _sample_random_day(self) -> str:
         return str(np.random.choice(self._days_left, 1, replace=False)[0])
 
+
+
     def _reinitialize_input_data_after_reset(self) -> None:
         self._random_day = self._sample_random_day()
-        self._forecasted_price_vector = self._input_data[self._random_day][
-            "price_forecast"
-        ]
-        self._realized_price_vector = self._input_data[self._random_day][
-            "price_realized"
-        ]
-        self._min_price_realized = np.min(self._realized_price_vector)
-        self._max_price_realized = np.max(self._realized_price_vector)
-        self._min_price_forecasted = np.min(self._forecasted_price_vector)
-        self._max_price_forecasted = np.max(self._forecasted_price_vector)
-        self._forecasted_price_vector_scaled = (
-            self._input_data[self._random_day]["price_forecast"]
-            - self._min_price_forecasted
-        ) / (self._max_price_forecasted - self._min_price_forecasted)
-        self._realized_price_vector_scaled = (
-            self._input_data[self._random_day]["price_realized"]
-            - self._min_price_realized
-        ) / (self._max_price_realized - self._min_price_realized)
-        self._date_month = self._input_data[self._random_day]["date_month"][0]
-        self._day_of_week = self._input_data[self._random_day]["day_of_week"][0]
-        self._wind_forecast_daily_mean = self._input_data[self._random_day][
-            "wind_forecast_daily_mean"
-        ][0]
-        self._wind_forecast_daily_std = self._input_data[self._random_day][
-            "wind_forecast_daily_std"
-        ][0]
-        self._spread_id_full_da_mean = self._input_data[self._random_day][
-            "spread_id_full_da_mean"
-        ][0]
-        self._spread_id_full_da_std = self._input_data[self._random_day][
-            "spread_id_full_da_std"
-        ][0]
-        self._spread_id_full_da_min = self._input_data[self._random_day][
-            "spread_id_full_da_min"
-        ][0]
-        self._spread_id_full_da_max = self._input_data[self._random_day][
-            "spread_id_full_da_max"
-        ][0]
 
+        self._forecasted_price_vector = self._input_data[self._random_day]["price_forecast"]
+        self._realized_price_vector = self._input_data[self._random_day]["price_realized"]
+
+        self._min_price_realized = float(np.min(self._realized_price_vector))
+        self._max_price_realized = float(np.max(self._realized_price_vector))
+        self._min_price_forecasted = float(np.min(self._forecasted_price_vector))
+        self._max_price_forecasted = float(np.max(self._forecasted_price_vector))
+
+        # Daily scaling for forecast prices: 0..1 then map to -1..1 (Box(-1,1))
+        daily_price_spread = self._max_price_forecasted - self._min_price_forecasted
+        daily_price_spread = daily_price_spread if abs(daily_price_spread) > 1e-6 else 1.0
+        pf01 = (self._forecasted_price_vector - self._min_price_forecasted) / daily_price_spread
+        self._forecasted_price_vector_scaled = (pf01 * 2.0 - 1.0).astype(np.float32)
+
+        # Scalar features (already globally scaled via MinMaxScaler in prepare_input_data)
+        self._date_month = float(self._input_data[self._random_day]["date_month"][0])
+        self._day_of_week = float(self._input_data[self._random_day]["day_of_week"][0])
+
+        self._wind_forecast_daily_mean = float(self._input_data[self._random_day]["wind_forecast_daily_mean"][0])
+        self._wind_forecast_daily_std = float(self._input_data[self._random_day]["wind_forecast_daily_std"][0])
+
+        self._spread_id_full_da_mean = float(self._input_data[self._random_day]["spread_id_full_da_mean"][0])
+        self._spread_id_full_da_std = float(self._input_data[self._random_day]["spread_id_full_da_std"][0])
+        self._spread_id_full_da_min = float(self._input_data[self._random_day]["spread_id_full_da_min"][0])
+        self._spread_id_full_da_max = float(self._input_data[self._random_day]["spread_id_full_da_max"][0])
+
+        # NEW: EXAA-derived daily features (globally scaled)
+        self._exaa_pf_daily_mean = float(self._input_data[self._random_day]["exaa_pf_daily_mean"][0])
+        self._exaa_pf_daily_std = float(self._input_data[self._random_day]["exaa_pf_daily_std"][0])
+        self._exaa_pf_daily_min = float(self._input_data[self._random_day]["exaa_pf_daily_min"][0])
+        self._exaa_pf_daily_max = float(self._input_data[self._random_day]["exaa_pf_daily_max"][0])
+        self._exaa_pf_daily_spread = float(self._input_data[self._random_day]["exaa_pf_daily_spread"][0])
+        self._exaa_pf_daily_diff_sum = float(self._input_data[self._random_day]["exaa_pf_daily_diff_sum"][0])
+        self._exaa_pf_daily_diff_max = float(self._input_data[self._random_day]["exaa_pf_daily_diff_max"][0])
+
+        # Timestamps
         self._timestamps = self._input_data[self._random_day]["timestamps"]
 
-        self._pv_forecast = self._input_data[self._random_day][
-            "pv_forecast_d_minus_1_1000_de_lu_mw"
-        ]
+        # Forecast time series (already globally scaled by scaler)
+        self._pv_forecast = self._input_data[self._random_day]["pv_forecast_d_minus_1_1000_de_lu_mw"]
+        self._wind_onshore_forecast = self._input_data[self._random_day]["wind_onshore_forecast_d_minus_1_1000_de_lu_mw"]
+        self._wind_offshore_forecast = self._input_data[self._random_day]["wind_offshore_forecast_d_minus_1_1000_de_lu_mw"]
+        self._load_forecast = self._input_data[self._random_day]["load_forecast_d_minus_1_1000_total_de_lu_mw"]
 
-        self._wind_onshore_forecast = self._input_data[self._random_day][
-            "wind_onshore_forecast_d_minus_1_1000_de_lu_mw"
-        ]
-        self._load_forecast = self._input_data[self._random_day][
-            "load_forecast_d_minus_1_1000_total_de_lu_mw"
-        ]
-
+        # Residual load (still on globally scaled series)
         self._residual_load_forecast = (
             self._load_forecast
+            - self._pv_forecast
             - self._wind_onshore_forecast
-            - self._pv_forecast
-            - self._pv_forecast
+            - self._wind_offshore_forecast
         )
 
-        self._min_residual_load_forecast = np.min(self._residual_load_forecast)
-        self._max_residual_load_forecast = np.max(self._residual_load_forecast)
+        # Use same arrays as "scaled" (because they already are)
+        self._pv_forecast_scaled = self._pv_forecast
+        self._wind_onshore_forecast_scaled = self._wind_onshore_forecast
+        self._wind_offshore_forecast_scaled = self._wind_offshore_forecast
+        self._load_forecast_scaled = self._load_forecast
+        self._residual_load_forecast_scaled = self._residual_load_forecast
 
-        denominator = (
-            self._max_residual_load_forecast - self._min_residual_load_forecast
-        )
-        if denominator != 0:
-            self._residual_load_forecast_scaled = (
-                self._residual_load_forecast - self._min_residual_load_forecast
-            ) / denominator
-        else:
-            self._residual_load_forecast_scaled = np.zeros(24)
-
-        self._min_pv_forecast = np.min(self._pv_forecast)
-        self._max_pv_forecast = np.max(self._pv_forecast)
-
-        denominator = self._max_pv_forecast - self._min_pv_forecast
-        if denominator != 0:
-            self._pv_forecast_scaled = (
-                self._pv_forecast - self._min_pv_forecast
-            ) / denominator
-        else:
-            self._pv_forecast_scaled = np.zeros(24)
-
-        self._pv_forecast_daily_mean = np.mean(self._pv_forecast)
-        self._pv_forecast_daily_std = np.std(self._pv_forecast)
-
-        self._min_wind_onshore_forecast = np.min(self._wind_onshore_forecast)
-        self._max_wind_onshore_forecast = np.max(self._wind_onshore_forecast)
-
-        denominator = self._max_wind_onshore_forecast - self._min_wind_onshore_forecast
-        if denominator != 0:
-            self._wind_onshore_forecast_scaled = (
-                self._wind_onshore_forecast - self._min_wind_onshore_forecast
-            ) / denominator
-        else:
-            self._wind_onshore_forecast_scaled = np.zeros(24)
-
-        self._min_load_forecast = np.min(self._load_forecast)
-        self._max_load_forecast = np.max(self._load_forecast)
-
-        denominator = self._max_load_forecast - self._min_load_forecast
-        if denominator != 0:
-            self._load_forecast_scaled = (
-                self._load_forecast - self._min_load_forecast
-            ) / denominator
-        else:
-            self._load_forecast_scaled = np.zeros(24)
-
-        self._load_forecast_daily_mean = np.mean(self._load_forecast)
-        self._load_forecast_daily_std = np.std(self._load_forecast)
-
-        # calculate load gradient of forecast
+        # Gradients
         self._delta_load_forecast = np.append(np.diff(self._load_forecast_scaled), 0)
         self._delta_pv_forecast_scaled = np.append(np.diff(self._pv_forecast_scaled), 0)
-        self._delta_wind_onshore_forecast_scaled = np.append(
-            np.diff(self._wind_onshore_forecast_scaled), 0
-        )
+        self._delta_wind_onshore_forecast_scaled = np.append(np.diff(self._wind_onshore_forecast_scaled), 0)
+
+
+    
 
     def log_data(
         self,
@@ -426,7 +503,6 @@ class BasicBatteryDAM(gym.Env):
         else:
             raise ValueError("Unknown mode {}", modus)
 
-        # TODO: log episode
         # write to dataframe
         log_df = pd.DataFrame(
             columns=[

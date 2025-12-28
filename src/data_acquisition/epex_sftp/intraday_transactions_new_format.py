@@ -13,9 +13,16 @@ import pandas as pd
 import paramiko
 import pytz
 from dotenv import load_dotenv
-from sqlalchemy import Engine, create_engine
+from sqlalchemy import Engine
 
-warnings.simplefilter(action="ignore", category=FutureWarning)
+from src.data_acquisition.postgres_db.postgres_db_hooks import ThesisDBHook
+
+#warnings.simplefilter(action="ignore", category=FutureWarning)
+import platform
+
+if platform.system() == "Darwin":
+    os.environ.setdefault("TMPDIR", "/tmp")
+    tempfile.tempdir = "/tmp"
 
 load_dotenv()
 
@@ -29,15 +36,10 @@ SFTP_PORT = os.getenv("EPEX_SFTP_PORT")
 SFTP_USERNAME = os.getenv("EPEX_SFTP_USER")
 SFTP_PASSWORD = os.getenv("EPEX_SFTP_PW")
 
-PASSWORD = os.getenv("SQL_PASSWORD")
-if PASSWORD:
-    password_for_url = f":{PASSWORD}"
-else:
-    password_for_url = ""
-
-THESIS_DB_NAME = os.getenv("POSTGRES_DB_NAME")
 POSTGRES_USERNAME = os.getenv("POSTGRES_USER")
 POSTGRES_DB_HOST = os.getenv("POSTGRES_DB_HOST")
+POSTGRES_PORT = os.getenv("POSTGRES_PORT")
+POSTGRES_PASSWORD = os.getenv("SQL_PASSWORD") or os.getenv("POSTGRES_PASSWORD")
 BERLIN_TZ = pytz.timezone("Europe/Berlin")
 
 
@@ -81,6 +83,8 @@ def download_intraday_transaction_zip_archive(
 ) -> Path:
     """Download the ZIP file from the SFTP server."""
     sftp = sftp_connect()
+    if sftp is None:
+        raise ConnectionError("SFTP connection failed")
 
     files = sftp.listdir(remote_path.as_posix())
     zip_files = [
@@ -114,16 +118,13 @@ def unpack_archive(path: Path) -> Path:
         extract_path = path.parent
         archive.extractall(extract_path)
 
-    # bwcloud specific extration path to avoid overflow of system storage
-    nested_extract_path = "/dev/shm/tmp-extract/"
+    nested_extract_path = extract_path
+    Path(nested_extract_path).mkdir(parents=True, exist_ok=True)
 
-    # Check for any nested ZIP files and unpack them
+
     for extracted_file in extract_path.glob("**/*.zip"):
         with zipfile.ZipFile(extracted_file, "r") as nested_archive:
-            # nested_extract_path = extracted_file.parent
             nested_archive.extractall(nested_extract_path)
-
-        # Optional: Delete the nested ZIP file after extraction if not needed
         extracted_file.unlink()
 
     return extract_path
@@ -239,19 +240,26 @@ def load_data(df: pd.DataFrame, database: Engine) -> None:
 def execute_etl_transactions_new_format(years: List[int]) -> None:
     ## be aware: 2022 there was a change in data format
     # -> file for 2022 incomplete (new files "Continuous_Trades-MA-yyyymmdd-yyyymmddThhmmsssssZ")
-    database = create_engine(
-        f"postgresql://{POSTGRES_USERNAME}{password_for_url}@{POSTGRES_DB_HOST}/{THESIS_DB_NAME}"
+    thesis_db_hook = ThesisDBHook(
+        username=POSTGRES_USERNAME,
+        hostname=POSTGRES_DB_HOST,
+        port=POSTGRES_PORT,
+        password=POSTGRES_PASSWORD,
     )
+    database = thesis_db_hook.sql_alchemy_connection
     for year in years:
-        with tempfile.TemporaryDirectory() as tmpdirname:
+        with tempfile.TemporaryDirectory(dir=tempfile.gettempdir()) as tmpdirname:
             transaction_archive_location = download_intraday_transaction_zip_archive(
                 remote_path=TRANSACTION_HISTORICAL_DATA_PATH_PREFIX,
                 local_path=Path(tmpdirname),
                 file_name_prefix=TRANSACTION_ZIP_FILE_NAME_PREFIX,
                 year=year,
             )
+            logging.info(f"[{year}] ZIP downloaded to: {transaction_archive_location}")
+
             unpacked_archive_path = unpack_archive(transaction_archive_location)
             filenames = fetch_csv_file_names(path=unpacked_archive_path)
+            logging.info(f"[{year}] Found {len(filenames)} CSV files in {unpacked_archive_path}")
             for idx, filename in enumerate(filenames):
                 logging.info(
                     f"Processing {filename} - File #{idx + 1} from {len(filenames)}"
@@ -272,5 +280,5 @@ def execute_etl_transactions_new_format(years: List[int]) -> None:
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
-    years = [2022]
+    years = [2024]
     execute_etl_transactions_new_format(years)
